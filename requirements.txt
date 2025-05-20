@@ -1,0 +1,5 @@
+discord
+bs4
+requests
+dotenv
+apscheduler
