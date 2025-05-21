@@ -18,6 +18,7 @@ from apscheduler.triggers.cron import CronTrigger
 # vote for difficulty
 # help command with usages
 # use app command instead of !command
+# add modes (weekly, biweekly, monthly)
 
 SET_ANNOUNCEMENT_CHANNEL_USAGE = '!set_announcement_channel <channel name>'
 START_USAGE = '!start <day> <hour>'
