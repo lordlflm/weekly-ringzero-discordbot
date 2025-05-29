@@ -33,7 +33,7 @@ categories = []
 
 def run_discord_bot():
     load_dotenv(override=True)
-    DISCORD_TOKEN = os.getenv('DISCORD_TOKEN_DEV')
+    DISCORD_TOKEN = os.getenv('DISCORD_TOKEN_PROD')
     intents = discord.Intents.default()
     intents.message_content = True
     bot = commands.Bot(command_prefix='!', intents=intents)
