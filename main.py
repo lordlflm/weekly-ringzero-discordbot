@@ -41,7 +41,8 @@ def run_discord_bot():
     @bot.event
     async def on_ready():
         try:
-            synced = await bot.tree.sync(guild=discord.Object(id=768896437261041704))
+            synced = await bot.tree.sync()
+            # synced = await bot.tree.sync(guild=discord.Object(id=768896437261041704))
             print(f"Synced {len(synced)} command(s)")
         except Exception as e:
             print(e)
@@ -56,8 +57,8 @@ def run_discord_bot():
         ]
 
     @bot.tree.command(name='set_announcement_channel', 
-        description='Set the channel in which the bot will interact', 
-        guild=discord.Object(id=768896437261041704))
+        # guild=discord.Object(id=768896437261041704),
+        description='Set the channel in which the bot will interact')
     @app_commands.describe(channel='The channel in which the bot will interact')
     @app_commands.autocomplete(channel=announcement_channel_autocomplete)
     async def set_announcement_channel(interaction: discord.Interaction, channel: str):
@@ -89,8 +90,8 @@ def run_discord_bot():
         ]
 
     @bot.tree.command(name='start', 
-        description='Starts weekly challenge announcements',
-        guild=discord.Object(id=768896437261041704))
+        # guild=discord.Object(id=768896437261041704),
+        description='Starts weekly challenge announcements')
     @app_commands.describe(day='The day of the week for weekly challenge announcement')
     @app_commands.describe(time='The time at which the challenge is announced')
     @app_commands.autocomplete(day=day_autocomplete)
@@ -128,8 +129,8 @@ def run_discord_bot():
         ]
 
     @bot.tree.command(name='category',
-        description="Vote for next week's challenge category",
-        guild=discord.Object(id=768896437261041704))
+        # guild=discord.Object(id=768896437261041704),
+        description="Vote for next week's challenge category")
     @app_commands.autocomplete(category=category_autocomplete)
     async def category(interaction: discord.Interaction, category: str):
         if category not in [category['title'] for category in categories]:
