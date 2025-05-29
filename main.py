@@ -1,23 +1,24 @@
-import os
-import random
 import asyncio
 import calendar
+import os
+import random
+import re
 
 import discord
-from discord.ext import commands
 import requests
-from bs4 import BeautifulSoup
-from dotenv import load_dotenv
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from discord import app_commands
+from discord.ext import commands
+from dotenv import load_dotenv
 
 # TODOS
 # 
 # filter already done challenges
-# vote for category
 # vote for difficulty
+# fallback if no challenge matches category and difficulty
 # help command with usages
-# use app command instead of !command
+# use ringzero api instead of scraping
 # add modes (weekly, biweekly, monthly)
 
 SET_ANNOUNCEMENT_CHANNEL_USAGE = '!set_announcement_channel <channel name>'
@@ -26,77 +27,126 @@ START_USAGE = '!start <day> <hour>'
 bot = None
 announcement_channel = None
 scheduler = AsyncIOScheduler()
+category_votes = {}
+difficulty_votes = {}
+categories = []
 
 def run_discord_bot():
     load_dotenv(override=True)
-    DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
+    DISCORD_TOKEN = os.getenv('DISCORD_TOKEN_DEV')
     intents = discord.Intents.default()
     intents.message_content = True
     bot = commands.Bot(command_prefix='!', intents=intents)
 
     @bot.event
     async def on_ready():
+        try:
+            synced = await bot.tree.sync(guild=discord.Object(id=768896437261041704))
+            print(f"Synced {len(synced)} command(s)")
+        except Exception as e:
+            print(e)
         scheduler.start()
 
-    @bot.command()
-    async def set_announcement_channel(ctx, *args):
-        if len(args) < 1:
-            await ctx.send(f"Wrong number of arguments. Usage: `{SET_ANNOUNCEMENT_CHANNEL_USAGE}`")
+
+    async def announcement_channel_autocomplete(interaction: discord.Interaction, current: str):
+        text_channels = interaction.guild.text_channels
+        return [
+            app_commands.Choice(name=text_channel.name, value=text_channel.name)
+            for text_channel in text_channels if current.lower() in text_channel.name.lower()
+        ]
+
+    @bot.tree.command(name='set_announcement_channel', 
+        description='Set the channel in which the bot will interact', 
+        guild=discord.Object(id=768896437261041704))
+    @app_commands.describe(channel='The channel in which the bot will interact')
+    @app_commands.autocomplete(channel=announcement_channel_autocomplete)
+    async def set_announcement_channel(interaction: discord.Interaction, channel: str):
+        text_channels = [channel for channel in interaction.guild.text_channels]
+        channel_object = next((text_channel for text_channel in text_channels if channel == text_channel.name), None)
+        if channel_object is None:           
+            await interaction.response.send_message(f"'{channel}' is not a valid text channel")
             return
-
-        channel_name = args[0]
-        guild = ctx.guild
-        text_channels = [channel for channel in guild.text_channels]
-
-        channel = next((channel for channel in text_channels if channel_name == channel.name), None)
-
-        if channel is None:
-            await ctx.send(f"'{channel_name}' is not a valid text channel")
-            return
-
         global announcement_channel
-        announcement_channel = channel
+        announcement_channel = channel_object
+        await interaction.response.send_message(f"Successfully set '{channel}' as announcement channel", ephemeral=True)
 
-        await ctx.send(f"Successfully set '{channel_name}' as announcement channel")
+    async def day_autocomplete(interaction: discord.Interaction, current: str):
+        return [
+            app_commands.Choice(name=day, value=day)
+            for day in list(calendar.day_name) if current.lower() in day.lower()
+        ]
 
-    @bot.command()
-    async def start(ctx, *args):
+    async def time_autocomplete(interaction: discord.Interaction, current: str):
+        times = []
+        for hour in range(24):
+            for minute in range(60):
+                time = f"{hour:02}:{minute:02}"
+                if current.lower() in time.lower():
+                    times.append(time)
+        return [
+            app_commands.Choice(name=time, value=time)
+            for time in times[:25]
+        ]
+
+    @bot.tree.command(name='start', 
+        description='Starts weekly challenge announcements',
+        guild=discord.Object(id=768896437261041704))
+    @app_commands.describe(day='The day of the week for weekly challenge announcement')
+    @app_commands.describe(time='The time at which the challenge is announced')
+    @app_commands.autocomplete(day=day_autocomplete)
+    @app_commands.autocomplete(time=time_autocomplete)
+    async def start(interaction: discord.Interaction, day: str, time: str):
         global announcement_channel
         if announcement_channel is None:
-            await ctx.send(f"Please set an announcement_channel before running start. Use `{SET_ANNOUNCEMENT_CHANNEL_USAGE}`")
+            await interaction.response.send_message(f"Please set an announcement_channel before running start. Use `{SET_ANNOUNCEMENT_CHANNEL_USAGE}`")
             return
 
-        if len(args) < 2:
-            await ctx.send(f"Wrong number of arguments. Usage: `{START_USAGE}`")
+        if day.lower() not in map(lambda x: x.lower(), list(calendar.day_name)):
+            await interaction.response.send_message('Invalid day name')
+            return
+
+        match = re.fullmatch(r"([01]?[0-9]|[2][0-3]):([0-5][0-9])", time)
+        if match:
+            hour, minute = match.groups()
+        else:
+            await interaction.response.send_message('Invalid time')
             return
 
         try:
             scheduler.remove_job('announcement')
         except:
             pass
+ 
+        scheduler.add_job(job, args=[interaction.guild.id], id='announcement', trigger=CronTrigger(day_of_week=day_name_to_day_abr(day), hour=hour, minute=minute))
+        await interaction.response.send_message(f"Successfully started! Challenges will be announced on {day} at {time}")
 
-        day = day_name_to_day_abr(args[0])
-        if day is None:
-            await ctx.send("Invalid day")
+    async def category_autocomplete(interaction: discord.Interaction, current: str):
+        category_choices = [category['title'] for category in categories if current.lower() in category['title'].lower()]
+        return [
+            app_commands.Choice(name=category, value=category)
+            for category in category_choices[:25]
+        ]
+
+    @bot.tree.command(name='category',
+        description="Vote for next week's challenge category",
+        guild=discord.Object(id=768896437261041704))
+    @app_commands.autocomplete(category=category_autocomplete)
+    async def category(interaction: discord.Interaction, category: str):
+        if category not in [category['title'] for category in categories]:
+            await interaction.response.send_message('Not a valid category')
             return
 
-        try:
-            hour = int(args[1])
-        except:
-            ctx.send("Invalid hour")
+        guild_id = interaction.guild.id
+        user_id = interaction.user.id
+        guild_entry = category_votes.setdefault(guild_id, {'votes': {}, 'voted': []})
+        if user_id in guild_entry['voted']:
+            await interaction.response.send_message("You can only vote once a week")
             return
+        guild_entry['votes'][category] = guild_entry['votes'].get(category, 0) + 1
+        guild_entry['voted'].append(user_id)
 
-        minute = 0
-        if len(args) > 2:
-            try:
-                minute = int(args[2])
-            except:
-                ctx.send("Invalid minutes")
-                return
+        await interaction.response.send_message(f"You voted for {category}")
 
-        scheduler.add_job(job, CronTrigger(day_of_week=day, hour=hour, minute=minute), id='announcement')
-        await ctx.send(f"Successfully started! Challenges will be announced on {day} at {hour}:{minute:02}")
-    
     bot.run(DISCORD_TOKEN)
 
 def day_name_to_day_abr(day_name):
@@ -105,44 +155,55 @@ def day_name_to_day_abr(day_name):
         if day_name == day_names[i] or day_name == day_names[i].lower():
             return list(calendar.day_abbr)[i]
 
-async def job():
-    challenge_info_html = get_random_challenge_from_ringzero()
-    message = format_challenge_info_into_discord_message(challenge_info_html)
+async def job(guild_id: int):
+    challenge_info_json = get_random_challenge_from_ringzero(guild_id)
+    message = format_challenge_info_into_discord_message(challenge_info_json)
 
     global announcement_channel
     asyncio.create_task(announcement_channel.send("# 🔥 New Weekly Challenge! 🔥", embed=message))
 
-def format_challenge_info_into_discord_message(challenge_info_html):
-    anchor_tag = challenge_info_html.find('a')
-    name = anchor_tag.get_text()
-    url = f"https://ringzer0ctf.com{anchor_tag['href']}"
-    points = challenge_info_html.find('span', class_='points').get_text()
-    author = challenge_info_html.find_all('td')[-1].get_text()
+def format_challenge_info_into_discord_message(challenge_info_json):
+    url = f"https://ringzer0ctf.com/challenges/{challenge_info_json['id']}"
     embed = discord.Embed(
-        title=name,
+        title=challenge_info_json['title'],
         url=url,
         color=discord.Color.gold(),
     )
-    embed.add_field(name="Points", value=points, inline=True)
-    embed.add_field(name="Author", value=author, inline=True)
+    embed.add_field(name="Points", value=challenge_info_json['points'], inline=True)
+    embed.add_field(name="Author", value=challenge_info_json['author'], inline=True)
     embed.set_footer(text="ringzer0ctf.com")
     embed.set_image(url='https://ringzer0ctf.com/images/logo.png')
 
     return embed
 
-def get_random_challenge_from_ringzero():
-    response = requests.get('https://ringzer0ctf.com/challenges')
-    soup = BeautifulSoup(response.content, 'html.parser')
+def set_categories():
+    response = requests.get('https://ringzer0ctf.com/api/categories')
+    global categories
+    categories = [category['category'] for category in response.json()['data']['categories']]
 
-    challenges_tables = [table for table in soup.find_all('table') if 'Challenges descriptions' in table.find('thead').get_text()]
-    
+def get_random_challenge_from_ringzero(guild_id: int):
+    guild_category_votes = category_votes[guild_id]['votes']
+    category_votes[guild_id]['votes'] = {}
+    category_votes[guild_id]['voted'] = []
+
+    possible_categories = []
+    if len(guild_category_votes) == 0:
+        possible_categories = [category['title'] for category in categories]
+    else:
+        for category, votes in guild_category_votes.items():
+            for _ in range(votes):
+                possible_categories.append(category)
+
+    picked_category_title = possible_categories[random.randint(0, len(possible_categories) - 1)]
+    picked_category_id = next((category['id'] for category in categories if category['title'] == picked_category_title), None)
+
     challenges = []
-    for table in challenges_tables:
-        category_challenges = [challenge for challenge in table.find_all('tr')]
-        challenges += category_challenges
-
-    return challenges[random.randint(0, len(challenges))]
-    
+    response = requests.get(f" https://ringzer0ctf.com/api/category/challenges/{picked_category_id}")
+    challenges.extend([challenge['challenge'] for challenge in response.json()['data']['categories'][0]['category']['challenges']])
+        
+    set_categories()
+    return challenges[random.randint(0, len(challenges) - 1)]
 
 if __name__ == "__main__":
+    set_categories()
     run_discord_bot()
