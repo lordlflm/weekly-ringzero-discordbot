@@ -24,7 +24,6 @@ SET_ANNOUNCEMENT_CHANNEL_USAGE = '!set_announcement_channel <channel name>'
 START_USAGE = '!start <day> <hour>'
 
 bot = None
-announcement_channel = None
 scheduler = AsyncIOScheduler()
 
 # each guild has an entry
@@ -32,6 +31,7 @@ done_challenges = {}
 category_votes = {}
 difficulty_votes = {}
 categories = {}
+announcement_channels = {}
 
 def run_discord_bot():
     load_dotenv(override=True)
@@ -46,6 +46,7 @@ def run_discord_bot():
 
     @bot.event
     async def on_guild_join(guild: discord.Guild):
+        announcement_channels.setdefault(guild.id, None)
         categories.setdefault(guild.id, get_categories())
         category_votes.setdefault(guild.id, {'votes': {}, 'voted': []})
         done_challenges.setdefault(guild.id, [])
@@ -53,12 +54,15 @@ def run_discord_bot():
     @bot.event
     async def on_ready():
         for guild in bot.guilds:
+            announcement_channels.setdefault(guild.id, None)
             categories.setdefault(guild.id, get_categories())        
             category_votes.setdefault(guild.id, {'votes': {}, 'voted': []})
             done_challenges.setdefault(guild.id, [])
-        print(categories)
-        print(category_votes)
-        print(done_challenges)
+        # TODO remove prints later
+        print(f"DEBUG categories\n{categories}")
+        print(f"DEBUG category_votes\n{category_votes}")
+        print(f"DEBUG done_challenges\n{done_challenges}")
+        print(f"DEBUG announcement_channels\n{announcement_channels}")
         try:
             # synced = await bot.tree.sync()
             synced = await bot.tree.sync(guild=discord.Object(id=768896437261041704))
@@ -87,8 +91,7 @@ def run_discord_bot():
         if channel_object is None:           
             await interaction.response.send_message(f"'{channel}' is not a valid text channel")
             return
-        global announcement_channel
-        announcement_channel = channel_object
+        announcement_channels[interaction.guild.id] = channel_object
         await interaction.response.send_message(f"Successfully set '{channel}' as announcement channel", ephemeral=True)
 
     async def day_autocomplete(interaction: discord.Interaction, current: str):
@@ -117,8 +120,8 @@ def run_discord_bot():
     @app_commands.autocomplete(day=day_autocomplete)
     @app_commands.autocomplete(time=time_autocomplete)
     async def start(interaction: discord.Interaction, day: str, time: str):
-        global announcement_channel
-        if announcement_channel is None:
+        guild_announcement_channel = announcement_channels[interaction.guild.id]
+        if guild_announcement_channel is None:
             await interaction.response.send_message(f"Please set an announcement_channel before running start. Use `{SET_ANNOUNCEMENT_CHANNEL_USAGE}`")
             return
 
@@ -139,7 +142,7 @@ def run_discord_bot():
             pass
  
         scheduler.add_job(job, args=[interaction.guild.id], id='announcement', trigger=CronTrigger(day_of_week=day_name_to_day_abr(day), hour=hour, minute=minute))
-        await interaction.response.send_message(f"Successfully started! Challenges will be announced on {day} at {time}")
+        await interaction.response.send_message(f"Successfully started! Challenges will be announced on {day} at {time}", ephemeral=True)
 
     async def category_autocomplete(interaction: discord.Interaction, current: str):
         guild_categories = categories[interaction.guild.id]
@@ -182,8 +185,8 @@ async def job(guild_id: int):
     challenge_info_json = get_random_challenge_from_ringzero(guild_id)
     message = format_challenge_info_into_discord_message(challenge_info_json)
 
-    global announcement_channel
-    asyncio.create_task(announcement_channel.send("# 🔥 New Weekly Challenge! 🔥", embed=message))
+    guild_announcement_channel = announcement_channels[guild_id]
+    asyncio.create_task(guild_announcement_channel.send("# 🔥 New Weekly Challenge! 🔥", embed=message))
 
 def format_challenge_info_into_discord_message(challenge_info_json):
     url = f"https://ringzer0ctf.com/challenges/{challenge_info_json['id']}"
@@ -227,8 +230,12 @@ def get_random_challenge_from_ringzero(guild_id: int):
         
     categories[guild_id] = get_categories()
     challenge = challenges[random.randint(0, len(challenges) - 1)]
-    done_challenges[guild_id] = done_challenges[guild_id].append(challenge['title'])
-    print(done_challenges)
+    done_challenges[guild_id].append(challenge['title'])
+    # TODO remove prints later
+    print(f"DEBUG categories\n{categories}")
+    print(f"DEBUG category_votes\n{category_votes}")
+    print(f"DEBUG done_challenges\n{done_challenges}")
+    print(f"DEBUG announcement_channels\n{announcement_channels}")
     return challenge
 
 if __name__ == "__main__":
