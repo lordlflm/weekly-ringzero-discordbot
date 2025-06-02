@@ -1,8 +1,8 @@
-import asyncio
 import calendar
 import os
 import random
 import re
+import asyncio
 
 import discord
 import requests
@@ -18,7 +18,6 @@ from dotenv import load_dotenv
 # vote for difficulty
 # fallback if no challenge matches category and difficulty
 # help command with usages
-# use ringzero api instead of scraping
 # add modes (weekly, biweekly, monthly)
 
 SET_ANNOUNCEMENT_CHANNEL_USAGE = '!set_announcement_channel <channel name>'
@@ -27,25 +26,46 @@ START_USAGE = '!start <day> <hour>'
 bot = None
 announcement_channel = None
 scheduler = AsyncIOScheduler()
+
+# each guild has an entry
+done_challenges = {}
 category_votes = {}
 difficulty_votes = {}
-categories = []
+categories = {}
 
 def run_discord_bot():
     load_dotenv(override=True)
-    DISCORD_TOKEN = os.getenv('DISCORD_TOKEN_PROD')
+    DISCORD_TOKEN = os.getenv('DISCORD_TOKEN_DEV')
+    # DISCORD_TOKEN = os.getenv('DISCORD_TOKEN_PROD')
+    if DISCORD_TOKEN is None:
+        print("Discord token not found in .env file")
+        return
     intents = discord.Intents.default()
     intents.message_content = True
     bot = commands.Bot(command_prefix='!', intents=intents)
 
     @bot.event
+    async def on_guild_join(guild: discord.Guild):
+        categories.setdefault(guild.id, get_categories())
+        category_votes.setdefault(guild.id, {'votes': {}, 'voted': []})
+        done_challenges.setdefault(guild.id, [])
+
+    @bot.event
     async def on_ready():
+        for guild in bot.guilds:
+            categories.setdefault(guild.id, get_categories())        
+            category_votes.setdefault(guild.id, {'votes': {}, 'voted': []})
+            done_challenges.setdefault(guild.id, [])
+        print(categories)
+        print(category_votes)
+        print(done_challenges)
         try:
-            synced = await bot.tree.sync()
-            # synced = await bot.tree.sync(guild=discord.Object(id=768896437261041704))
+            # synced = await bot.tree.sync()
+            synced = await bot.tree.sync(guild=discord.Object(id=768896437261041704))
             print(f"Synced {len(synced)} command(s)")
         except Exception as e:
             print(e)
+            return
         scheduler.start()
 
 
@@ -57,7 +77,7 @@ def run_discord_bot():
         ]
 
     @bot.tree.command(name='set_announcement_channel', 
-        # guild=discord.Object(id=768896437261041704),
+        guild=discord.Object(id=768896437261041704),
         description='Set the channel in which the bot will interact')
     @app_commands.describe(channel='The channel in which the bot will interact')
     @app_commands.autocomplete(channel=announcement_channel_autocomplete)
@@ -90,7 +110,7 @@ def run_discord_bot():
         ]
 
     @bot.tree.command(name='start', 
-        # guild=discord.Object(id=768896437261041704),
+        guild=discord.Object(id=768896437261041704),
         description='Starts weekly challenge announcements')
     @app_commands.describe(day='The day of the week for weekly challenge announcement')
     @app_commands.describe(time='The time at which the challenge is announced')
@@ -122,24 +142,26 @@ def run_discord_bot():
         await interaction.response.send_message(f"Successfully started! Challenges will be announced on {day} at {time}")
 
     async def category_autocomplete(interaction: discord.Interaction, current: str):
-        category_choices = [category['title'] for category in categories if current.lower() in category['title'].lower()]
+        guild_categories = categories[interaction.guild.id]
+        category_choices = [category['title'] for category in guild_categories if current.lower() in category['title'].lower()]
         return [
             app_commands.Choice(name=category, value=category)
             for category in category_choices[:25]
         ]
 
     @bot.tree.command(name='category',
-        # guild=discord.Object(id=768896437261041704),
+        guild=discord.Object(id=768896437261041704),
         description="Vote for next week's challenge category")
     @app_commands.autocomplete(category=category_autocomplete)
     async def category(interaction: discord.Interaction, category: str):
-        if category not in [category['title'] for category in categories]:
+        guild_categories = categories[interaction.guild.id]
+        if category not in [category['title'] for category in guild_categories]:
             await interaction.response.send_message('Not a valid category')
             return
 
         guild_id = interaction.guild.id
         user_id = interaction.user.id
-        guild_entry = category_votes.setdefault(guild_id, {'votes': {}, 'voted': []})
+        guild_entry = category_votes[guild_id]
         if user_id in guild_entry['voted']:
             await interaction.response.send_message("You can only vote once a week")
             return
@@ -177,34 +199,37 @@ def format_challenge_info_into_discord_message(challenge_info_json):
 
     return embed
 
-def set_categories():
+def get_categories():
     response = requests.get('https://ringzer0ctf.com/api/categories')
-    global categories
-    categories = [category['category'] for category in response.json()['data']['categories']]
+    return [category['category'] for category in response.json()['data']['categories']]
 
 def get_random_challenge_from_ringzero(guild_id: int):
-    guild_category_votes = category_votes[guild_id]['votes']
+    guild_category_votes = category_votes[guild_id]['votes'] or {}
+    guild_categories = categories[guild_id]
     category_votes[guild_id]['votes'] = {}
     category_votes[guild_id]['voted'] = []
 
     possible_categories = []
     if len(guild_category_votes) == 0:
-        possible_categories = [category['title'] for category in categories]
+        possible_categories = [category['title'] for category in guild_categories]
     else:
         for category, votes in guild_category_votes.items():
             for _ in range(votes):
                 possible_categories.append(category)
 
     picked_category_title = possible_categories[random.randint(0, len(possible_categories) - 1)]
-    picked_category_id = next((category['id'] for category in categories if category['title'] == picked_category_title), None)
+    picked_category_id = next((category['id'] for category in guild_categories if category['title'] == picked_category_title), None)
 
     challenges = []
     response = requests.get(f" https://ringzer0ctf.com/api/category/challenges/{picked_category_id}")
-    challenges.extend([challenge['challenge'] for challenge in response.json()['data']['categories'][0]['category']['challenges']])
+    guild_done_challenges = done_challenges[guild_id]
+    challenges.extend([challenge['challenge'] for challenge in response.json()['data']['categories'][0]['category']['challenges'] if challenge['challenge']['title'] not in guild_done_challenges])
         
-    set_categories()
-    return challenges[random.randint(0, len(challenges) - 1)]
+    categories[guild_id] = get_categories()
+    challenge = challenges[random.randint(0, len(challenges) - 1)]
+    done_challenges[guild_id] = done_challenges[guild_id].append(challenge['title'])
+    print(done_challenges)
+    return challenge
 
 if __name__ == "__main__":
-    set_categories()
     run_discord_bot()
