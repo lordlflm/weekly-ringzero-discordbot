@@ -14,9 +14,7 @@ from dotenv import load_dotenv
 
 # TODOS
 # 
-# vote for difficulty
 # start with first challenge of a track
-# fallback if no challenge matches category and difficulty
 # help command with usages
 # add modes (weekly, biweekly, monthly)
 
@@ -36,8 +34,8 @@ announcement_channels = {}
 
 def run_discord_bot():
     load_dotenv(override=True)
-    DISCORD_TOKEN = os.getenv('DISCORD_TOKEN_DEV')
-    # DISCORD_TOKEN = os.getenv('DISCORD_TOKEN_PROD')
+    # DISCORD_TOKEN = os.getenv('DISCORD_TOKEN_DEV')
+    DISCORD_TOKEN = os.getenv('DISCORD_TOKEN_PROD')
     if DISCORD_TOKEN is None:
         print("DISCORD_TOEKN_PROD entry not found in .env file")
         return
@@ -63,8 +61,8 @@ def run_discord_bot():
         # TODO remove prints later
         debug_entries("on_ready event called")
         try:
-            # synced = await bot.tree.sync()
-            synced = await bot.tree.sync(guild=discord.Object(id=768896437261041704))
+            synced = await bot.tree.sync()
+            # synced = await bot.tree.sync(guild=discord.Object(id=768896437261041704))
             print(f"Synced {len(synced)} command(s)")
         except Exception as e:
             print(e)
@@ -80,7 +78,7 @@ def run_discord_bot():
         ]
 
     @bot.tree.command(name='set_announcement_channel', 
-        guild=discord.Object(id=768896437261041704),
+        # guild=discord.Object(id=768896437261041704),
         description='Set the channel in which the bot will interact')
     @app_commands.describe(channel='The channel in which the bot will interact')
     @app_commands.autocomplete(channel=announcement_channel_autocomplete)
@@ -116,7 +114,7 @@ def run_discord_bot():
         ]
 
     @bot.tree.command(name='start', 
-        guild=discord.Object(id=768896437261041704),
+        # guild=discord.Object(id=768896437261041704),
         description='Starts weekly challenge announcements')
     @app_commands.describe(day='The day of the week for weekly challenge announcement')
     @app_commands.describe(time='The time at which the challenge is announced')
@@ -170,7 +168,7 @@ def run_discord_bot():
         ]
 
     @bot.tree.command(name='category',
-        guild=discord.Object(id=768896437261041704),
+        # guild=discord.Object(id=768896437261041704),
         description="Vote for next week's challenge category")
     @app_commands.describe(category='The category of the challenge')
     @app_commands.autocomplete(category=category_autocomplete)
@@ -204,7 +202,7 @@ def run_discord_bot():
         ]
 
     @bot.tree.command(name='difficulty',
-        guild=discord.Object(id=768896437261041704),
+        # guild=discord.Object(id=768896437261041704),
         description="Vote for next week's challenge difficulty")
     @app_commands.describe(difficulty='The difficulty of the challenge')
     @app_commands.autocomplete(difficulty=difficulty_autocomplete)
